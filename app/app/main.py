@@ -1,9 +1,16 @@
+import logging
+
 import httpx
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import FastAPI, HTTPException
+from fastapi.concurrency import run_in_threadpool
 
 from app.openalex import search_works
+from app.storage import get_history, save_search
 
-app = FastAPI(title="PaperTrail", version="0.1.0")
+logger = logging.getLogger("papertrail")
+
+app = FastAPI(title="PaperTrail", version="0.2.0")
 
 
 @app.get("/health")
@@ -26,4 +33,19 @@ async def search(q: str = "", limit: int = 10):
     except httpx.HTTPError:
         raise HTTPException(status_code=503, detail="Failed to fetch results from OpenAlex.")
 
+    try:
+        await run_in_threadpool(save_search, q, len(results))
+    except (BotoCoreError, ClientError):
+        logger.exception("Failed to save search history")
+
     return {"query": q, "count": len(results), "results": results}
+
+
+@app.get("/history")
+def history():
+    try:
+        items = get_history()
+    except (BotoCoreError, ClientError):
+        logger.exception("Failed to read search history")
+        raise HTTPException(status_code=503, detail="Search history is unavailable.")
+    return {"count": len(items), "items": items}
